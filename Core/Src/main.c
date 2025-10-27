@@ -23,7 +23,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "lwip/apps/httpd.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -99,7 +99,7 @@ int main(void)
   MX_CAN1_Init();
   MX_CAN2_Init();
   /* USER CODE BEGIN 2 */
-
+  httpd_init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -108,8 +108,9 @@ int main(void)
   {
     /* USER CODE END WHILE */
     MX_USB_HOST_Process();
-    MX_LWIP_Process();
+
     /* USER CODE BEGIN 3 */
+    MX_LWIP_Process();
   }
   /* USER CODE END 3 */
 }

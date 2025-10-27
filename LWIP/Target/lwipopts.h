@@ -30,7 +30,15 @@
 
 /* Within 'USER CODE' section, code will be kept by default at each generation */
 /* USER CODE BEGIN 0 */
+/* This defines checks whether tcp_write has to copy data or not
+ * Since CubeMX 1.27.1. always treat HTTP DATA as volatile, due to Zero copy ETH rewrite as STM32F40x and STM32F41x ETH cannot access FLASH
+ */
+#define HTTP_IS_DATA_VOLATILE(hs) TCP_WRITE_FLAG_COPY
 
+/** Default: dynamic headers are sent from ROM (non-dynamic headers are handled like file data)
+ * Since CubeMX 1.27.1. always treat HTTP HDR as volatile, due to Zero copy ETH rewrite as STM32F40x and STM32F41x ETH cannot access FLASH
+ */
+#define HTTP_IS_HDR_VOLATILE(hs, ptr) TCP_WRITE_FLAG_COPY
 /* USER CODE END 0 */
 
 #ifdef __cplusplus
@@ -53,6 +61,8 @@
 #define SYS_LIGHTWEIGHT_PROT 0
 /*----- Value in opt.h for MEM_ALIGNMENT: 1 -----*/
 #define MEM_ALIGNMENT 4
+/*----- Default Value for MEM_SIZE: 1600 ---*/
+#define MEM_SIZE 10*1024
 /*----- Value in opt.h for LWIP_ETHERNET: LWIP_ARP || PPPOE_SUPPORT -*/
 #define LWIP_ETHERNET 1
 /*----- Value in opt.h for LWIP_DNS_SECURE: (LWIP_DNS_SECURE_RAND_XID | LWIP_DNS_SECURE_NO_MULTIPLE_OUTSTANDING | LWIP_DNS_SECURE_RAND_SRC_PORT) -*/
@@ -73,6 +83,8 @@
 #define LWIP_SOCKET 0
 /*----- Value in opt.h for RECV_BUFSIZE_DEFAULT: INT_MAX -----*/
 #define RECV_BUFSIZE_DEFAULT 2000000000
+/*----- Default Value for LWIP_HTTPD: 0 ---*/
+#define LWIP_HTTPD 1
 /*----- Value in opt.h for LWIP_STATS: 1 -----*/
 #define LWIP_STATS 0
 /*----- Value in opt.h for CHECKSUM_GEN_IP: 1 -----*/
