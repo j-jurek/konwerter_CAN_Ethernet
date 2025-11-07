@@ -19,7 +19,6 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "lwip.h"
-#include "usb_host.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -45,6 +44,8 @@
 CAN_HandleTypeDef hcan1;
 CAN_HandleTypeDef hcan2;
 
+HCD_HandleTypeDef hhcd_USB_OTG_FS;
+
 /* USER CODE BEGIN PV */
 
 /* USER CODE END PV */
@@ -54,15 +55,64 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_CAN1_Init(void);
 static void MX_CAN2_Init(void);
-void MX_USB_HOST_Process(void);
-
+static void MX_USB_OTG_FS_HCD_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static uint32_t tx_mailbox_used;
+static uint8_t tx_data[8];
+static CAN_RxHeaderTypeDef rx_header;
+static uint8_t rx_data[8];
+//
+CAN_TxHeaderTypeDef TxHeader;
+CAN_RxHeaderTypeDef RxHeader;
 
+uint32_t TxMailbox[4];
+
+uint8_t TxData[8];
+uint8_t RxData[8];
+
+uint8_t count = 0;
+
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
+{
+	HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &RxHeader, RxData);
+	count++;
+}
+void CAN_filter_config(void){
+	 CAN_FilterTypeDef canfilterconfig;
+
+	  canfilterconfig.FilterActivation = CAN_FILTER_ENABLE;
+	  canfilterconfig.FilterBank = 10;  // anything between 0 to SlaveStartFilterBank
+	  canfilterconfig.FilterFIFOAssignment = CAN_RX_FIFO0;
+	  canfilterconfig.FilterIdHigh = 0x0000;
+	  canfilterconfig.FilterIdLow = 0x0000;
+	  canfilterconfig.FilterMaskIdHigh = 0x0000;
+	  canfilterconfig.FilterMaskIdLow = 0x0000;
+	  canfilterconfig.FilterMode = CAN_FILTERMODE_IDMASK;
+	  canfilterconfig.FilterScale = CAN_FILTERSCALE_32BIT;
+	  canfilterconfig.SlaveStartFilterBank = 13;  // 13 to 27 are assigned to slave CAN (CAN 2) OR 0 to 12 are assgned to CAN1
+
+	  if (HAL_CAN_ConfigFilter(&hcan1, &canfilterconfig) != HAL_OK)
+	   {
+	    /* Filter configuration Error */
+	    Error_Handler();
+	   }
+
+	   if (HAL_CAN_Start(&hcan1) != HAL_OK)
+	   {
+	    /* Start Error */
+	    Error_Handler();
+	   }
+	  if (HAL_CAN_ActivateNotification(&hcan1, HAL_CAN_RxFifo0MsgPendingCallback) != HAL_OK)
+	   {
+	    /* Notification Error */
+	    Error_Handler();
+	   }
+}
 /* USER CODE END 0 */
 
 /**
@@ -82,7 +132,6 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -94,12 +143,21 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_USB_HOST_Init();
   MX_LWIP_Init();
   MX_CAN1_Init();
   MX_CAN2_Init();
+  MX_USB_OTG_FS_HCD_Init();
   /* USER CODE BEGIN 2 */
   httpd_init();
+  CAN_filter_config();
+
+	CAN_TxHeaderTypeDef header;
+	header.DLC = 1;
+	header.ExtId = 0;
+	header.StdId = 2;
+	header.IDE = CAN_ID_STD;
+	header.RTR = CAN_RTR_DATA;
+	header.TransmitGlobalTime = DISABLE;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -107,9 +165,31 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-    MX_USB_HOST_Process();
 
     /* USER CODE BEGIN 3 */
+	 	  // Prepare CAN message
+	  tx_data[0] = 0x12;
+
+		if (HAL_CAN_AddTxMessage(&hcan1, &header, tx_data, &tx_mailbox_used) != HAL_OK)
+		{
+			Error_Handler();
+		}
+
+		while(HAL_CAN_GetTxMailboxesFreeLevel(&hcan1) != 3) {};
+		HAL_Delay(100);
+		int msg_count = HAL_CAN_GetRxFifoFillLevel(&hcan1, CAN_RX_FIFO0);
+
+		if (msg_count > 0)
+				{
+					HAL_CAN_GetRxMessage(&hcan1, CAN_RX_FIFO0, &rx_header, rx_data);
+
+					if (rx_data[0] == 0x12)
+					{
+						HAL_GPIO_TogglePin(LD4_GPIO_Port, LD6_Pin);
+					}
+				}
+
+				HAL_GPIO_TogglePin(LD4_GPIO_Port, LD4_Pin|LD3_Pin|LD5_Pin);
     MX_LWIP_Process();
   }
   /* USER CODE END 3 */
@@ -176,10 +256,10 @@ static void MX_CAN1_Init(void)
 
   /* USER CODE END CAN1_Init 1 */
   hcan1.Instance = CAN1;
-  hcan1.Init.Prescaler = 16;
+  hcan1.Init.Prescaler = 21;
   hcan1.Init.Mode = CAN_MODE_NORMAL;
   hcan1.Init.SyncJumpWidth = CAN_SJW_1TQ;
-  hcan1.Init.TimeSeg1 = CAN_BS1_1TQ;
+  hcan1.Init.TimeSeg1 = CAN_BS1_2TQ;
   hcan1.Init.TimeSeg2 = CAN_BS2_1TQ;
   hcan1.Init.TimeTriggeredMode = DISABLE;
   hcan1.Init.AutoBusOff = DISABLE;
@@ -231,6 +311,37 @@ static void MX_CAN2_Init(void)
   /* USER CODE BEGIN CAN2_Init 2 */
 
   /* USER CODE END CAN2_Init 2 */
+
+}
+
+/**
+  * @brief USB_OTG_FS Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USB_OTG_FS_HCD_Init(void)
+{
+
+  /* USER CODE BEGIN USB_OTG_FS_Init 0 */
+
+  /* USER CODE END USB_OTG_FS_Init 0 */
+
+  /* USER CODE BEGIN USB_OTG_FS_Init 1 */
+
+  /* USER CODE END USB_OTG_FS_Init 1 */
+  hhcd_USB_OTG_FS.Instance = USB_OTG_FS;
+  hhcd_USB_OTG_FS.Init.Host_channels = 8;
+  hhcd_USB_OTG_FS.Init.speed = HCD_SPEED_FULL;
+  hhcd_USB_OTG_FS.Init.dma_enable = DISABLE;
+  hhcd_USB_OTG_FS.Init.phy_itface = HCD_PHY_EMBEDDED;
+  hhcd_USB_OTG_FS.Init.Sof_enable = DISABLE;
+  if (HAL_HCD_Init(&hhcd_USB_OTG_FS) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USB_OTG_FS_Init 2 */
+
+  /* USER CODE END USB_OTG_FS_Init 2 */
 
 }
 
