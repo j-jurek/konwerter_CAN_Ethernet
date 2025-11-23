@@ -23,6 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "lwip/apps/httpd.h"
+#include "tcpServer.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -149,6 +150,7 @@ int main(void)
   MX_USB_OTG_FS_HCD_Init();
   /* USER CODE BEGIN 2 */
   httpd_init();
+  tcp_server_init();
   CAN_filter_config();
 
 	CAN_TxHeaderTypeDef header;
@@ -168,28 +170,28 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 	 	  // Prepare CAN message
-	  tx_data[0] = 0x12;
-
-		if (HAL_CAN_AddTxMessage(&hcan1, &header, tx_data, &tx_mailbox_used) != HAL_OK)
-		{
-			Error_Handler();
-		}
-
-		while(HAL_CAN_GetTxMailboxesFreeLevel(&hcan1) != 3) {};
-		HAL_Delay(100);
-		int msg_count = HAL_CAN_GetRxFifoFillLevel(&hcan1, CAN_RX_FIFO0);
-
-		if (msg_count > 0)
-				{
-					HAL_CAN_GetRxMessage(&hcan1, CAN_RX_FIFO0, &rx_header, rx_data);
-
-					if (rx_data[0] == 0x12)
-					{
-						HAL_GPIO_TogglePin(LD4_GPIO_Port, LD6_Pin);
-					}
-				}
-
-				HAL_GPIO_TogglePin(LD4_GPIO_Port, LD4_Pin|LD3_Pin|LD5_Pin);
+//	  tx_data[0] = 0x12;
+//
+//		if (HAL_CAN_AddTxMessage(&hcan1, &header, tx_data, &tx_mailbox_used) != HAL_OK)
+//		{
+//			Error_Handler();
+//		}
+//
+//		while(HAL_CAN_GetTxMailboxesFreeLevel(&hcan1) != 3) {};
+//		HAL_Delay(100);
+//		int msg_count = HAL_CAN_GetRxFifoFillLevel(&hcan1, CAN_RX_FIFO0);
+//
+//		if (msg_count > 0)
+//				{
+//					HAL_CAN_GetRxMessage(&hcan1, CAN_RX_FIFO0, &rx_header, rx_data);
+//
+//					if (rx_data[0] == 0x12)
+//					{
+//						HAL_GPIO_TogglePin(LD4_GPIO_Port, LD6_Pin);
+//					}
+//				}
+//
+//				HAL_GPIO_TogglePin(LD4_GPIO_Port, LD4_Pin|LD3_Pin|LD5_Pin);
     MX_LWIP_Process();
   }
   /* USER CODE END 3 */
