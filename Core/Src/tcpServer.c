@@ -1,60 +1,30 @@
-/**
- * Copyright (c) 2001-2004 Swedish Institute of Computer Science.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without modification,
- * are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- * 3. The name of the author may not be used to endorse or promote products
- *    derived from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT
- * SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT
- * OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
- * OF SUCH DAMAGE.
- *
- * This file is part of and a contribution to the lwIP TCP/IP stack.
- *
- * Credits go to Adam Dunkels (and the current maintainers) of this software.
- *
- * Christiaan Simons rewrote this file to get a more stable  application.
- *
- **/
-#include <tcpServer.h>
+#include <can_tcp_conv.h>
+#include "tcpServer.h"
 #include "lwip/tcp.h"
+#include <string.h>
 
-
-/*  protocol states */
+/* TCP server states */
 enum tcp_server_states
 {
-  ES_NONE = 0,
-  ES_ACCEPTED,
-  ES_RECEIVED,
-  ES_CLOSING
+    ES_NONE = 0,
+    ES_ACCEPTED,
+    ES_RECEIVED,
+    ES_CLOSING
 };
 
-/* structure for maintaining connection infos to be passed as argument
-   to LwIP callbacks*/
+/* structure for maintaining connection info */
 struct tcp_server_struct
 {
-  u8_t state;             /* current connection state */
-  u8_t retries;
-  struct tcp_pcb *pcb;    /* pointer on the current tcp_pcb */
-  struct pbuf *p;         /* pointer on the received/to be transmitted pbuf */
+    u8_t state;
+    u8_t retries;
+    struct tcp_pcb *pcb;
+    struct pbuf *p;
 };
 
+/* global pointer to active TCP client (for CAN->TCP) */
+struct tcp_pcb *tcp_client_pcb = NULL;
 
+/* function prototypes */
 static err_t tcp_server_accept(void *arg, struct tcp_pcb *newpcb, err_t err);
 static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err);
 static void tcp_server_error(void *arg, err_t err);
@@ -62,410 +32,183 @@ static err_t tcp_server_poll(void *arg, struct tcp_pcb *tpcb);
 static err_t tcp_server_sent(void *arg, struct tcp_pcb *tpcb, u16_t len);
 static void tcp_server_send(struct tcp_pcb *tpcb, struct tcp_server_struct *es);
 static void tcp_server_connection_close(struct tcp_pcb *tpcb, struct tcp_server_struct *es);
+static void tcp_server_handle(struct tcp_pcb *tpcb, struct tcp_server_struct *es);
 
-static void tcp_server_handle (struct tcp_pcb *tpcb, struct tcp_server_struct *es);
-
-
-/* Impementation for the TCP Server
-   1. Create TCP Block.
-   2. Bind the Block to server address, and port.
-   3. Listen for the  incoming requests by the client
-   4. Accept the Request, and now the server is ready for the data transfer
- */
-
+/* Initialize TCP server */
 void tcp_server_init(void)
 {
-	/* 1. create new tcp pcb */
-	struct tcp_pcb *tpcb;
+    struct tcp_pcb *tpcb = tcp_new();
+    if (!tpcb) return;
 
-	tpcb = tcp_new();
+    ip_addr_t myIPADDR;
+    IP_ADDR4(&myIPADDR, 192, 168, 0, 172);
 
-	err_t err;
+    if (tcp_bind(tpcb, &myIPADDR, 29200) != ERR_OK)
+    {
+        memp_free(MEMP_TCP_PCB, tpcb);
+        return;
+    }
 
-	/* 2. bind _pcb to port 7 ( protocol) */
-	ip_addr_t myIPADDR;
-	IP_ADDR4(&myIPADDR, 192, 168, 0, 172);
-	err = tcp_bind(tpcb, &myIPADDR, 29200);
-
-	if (err == ERR_OK)
-	{
-		/* 3. start tcp listening for _pcb */
-		tpcb = tcp_listen(tpcb);
-
-		/* 4. initialize LwIP tcp_accept callback function */
-		tcp_accept(tpcb, tcp_server_accept);
-	}
-	else
-	{
-		/* deallocate the pcb */
-		memp_free(MEMP_TCP_PCB, tpcb);
-	}
+    tpcb = tcp_listen(tpcb);
+    tcp_accept(tpcb, tcp_server_accept);
 }
 
-/**
-  * @brief  This function is the implementation of tcp_accept LwIP callback
-  * @param  arg: not used
-  * @param  newpcb: pointer on tcp_pcb struct for the newly created tcp connection
-  * @param  err: not used
-  * @retval err_t: error status
-  */
+/* tcp_accept callback */
 static err_t tcp_server_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
 {
-  err_t ret_err;
-  struct tcp_server_struct *es;
+    LWIP_UNUSED_ARG(arg);
+    LWIP_UNUSED_ARG(err);
 
-  LWIP_UNUSED_ARG(arg);
-  LWIP_UNUSED_ARG(err);
+    tcp_setprio(newpcb, TCP_PRIO_MIN);
 
-  /* set priority for the newly accepted tcp connection newpcb */
-  tcp_setprio(newpcb, TCP_PRIO_MIN);
+    struct tcp_server_struct *es = mem_malloc(sizeof(struct tcp_server_struct));
+    if (!es) {
+        tcp_close(newpcb);
+        return ERR_MEM;
+    }
 
-  /* allocate structure es to maintain tcp connection information */
-  es = (struct tcp_server_struct *)mem_malloc(sizeof(struct tcp_server_struct));
-  if (es != NULL)
-  {
     es->state = ES_ACCEPTED;
     es->pcb = newpcb;
     es->retries = 0;
     es->p = NULL;
 
-    /* pass newly allocated es structure as argument to newpcb */
     tcp_arg(newpcb, es);
-
-    /* initialize lwip tcp_recv callback function for newpcb  */
     tcp_recv(newpcb, tcp_server_recv);
-
-    /* initialize lwip tcp_err callback function for newpcb  */
     tcp_err(newpcb, tcp_server_error);
-
-    /* initialize lwip tcp_poll callback function for newpcb */
     tcp_poll(newpcb, tcp_server_poll, 0);
 
-    ret_err = ERR_OK;
-  }
-  else
-  {
-    /*  close tcp connection */
-    tcp_server_connection_close(newpcb, es);
-    /* return memory error */
-    ret_err = ERR_MEM;
-  }
-  return ret_err;
+    active_tcp_pcb = newpcb;
+
+    return ERR_OK;
 }
 
-
-/**
-  * @brief  This function is the implementation for tcp_recv LwIP callback
-  * @param  arg: pointer on a argument for the tcp_pcb connection
-  * @param  tpcb: pointer on the tcp_pcb connection
-  * @param  pbuf: pointer on the received pbuf
-  * @param  err: error information regarding the reveived pbuf
-  * @retval err_t: error code
-  */
+/* tcp_recv callback */
 static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
 {
-  struct tcp_server_struct *es;
-  err_t ret_err;
+    struct tcp_server_struct *es = (struct tcp_server_struct*)arg;
+    if (!es) return ERR_ARG;
 
-  LWIP_ASSERT("arg != NULL",arg != NULL);
-
-  es = (struct tcp_server_struct *)arg;
-
-  /* if we receive an empty tcp frame from client => close connection */
-  if (p == NULL)
-  {
-    /* remote host closed connection */
-    es->state = ES_CLOSING;
-    if(es->p == NULL)
-    {
-       /* we're done sending, close connection */
-       tcp_server_connection_close(tpcb, es);
+    if (!p) {
+        es->state = ES_CLOSING;
+        if(!es->p)
+            tcp_server_connection_close(tpcb, es);
+        else {
+            tcp_sent(tpcb, tcp_server_sent);
+            tcp_server_send(tpcb, es);
+        }
+        return ERR_OK;
     }
-    else
-    {
-      /* we're not done yet */
-      /* acknowledge received packet */
-      tcp_sent(tpcb, tcp_server_sent);
 
-      /* send remaining data*/
-      tcp_server_send(tpcb, es);
+    if (err != ERR_OK) {
+        if(pbuf_free(p) != 0) {}
+        es->p = NULL;
+        return err;
     }
-    ret_err = ERR_OK;
-  }
-  /* else : a non empty frame was received from client but for some reason err != ERR_OK */
-  else if(err != ERR_OK)
-  {
-    /* free received pbuf*/
-    if (p != NULL)
-    {
-      es->p = NULL;
-      pbuf_free(p);
+
+    if (es->state == ES_ACCEPTED) {
+        es->state = ES_RECEIVED;
+        es->p = p;
+        tcp_sent(tpcb, tcp_server_sent);
+        tcp_server_handle(tpcb, es);
+        return ERR_OK;
+    } else if (es->state == ES_RECEIVED) {
+        if(es->p) {
+            pbuf_chain(es->p, p);
+        } else {
+            es->p = p;
+        }
+        tcp_server_handle(tpcb, es);
+        return ERR_OK;
+    } else if (es->state == ES_CLOSING) {
+        tcp_recved(tpcb, p->tot_len);
+        pbuf_free(p);
+        return ERR_OK;
     }
-    ret_err = err;
-  }
-  else if(es->state == ES_ACCEPTED)
-  {
-    /* first data chunk in p->payload */
-    es->state = ES_RECEIVED;
 
-    /* store reference to incoming pbuf (chain) */
-    es->p = p;
-
-    /* initialize LwIP tcp_sent callback function */
-    tcp_sent(tpcb, tcp_server_sent);
-
-    /* handle the received data */
-    tcp_server_handle(tpcb, es);
-
-    ret_err = ERR_OK;
-  }
-  else if (es->state == ES_RECEIVED)
-  {
-    /* more data received from client and previous data has been already sent*/
-    if(es->p == NULL)
-    {
-      es->p = p;
-
-      /* handle the received data */
-      tcp_server_handle(tpcb, es);
-    }
-    else
-    {
-      struct pbuf *ptr;
-
-      /* chain pbufs to the end of what we recv'ed previously  */
-      ptr = es->p;
-      pbuf_chain(ptr,p);
-    }
-    ret_err = ERR_OK;
-  }
-  else if(es->state == ES_CLOSING)
-  {
-    /* odd case, remote side closing twice, trash data */
     tcp_recved(tpcb, p->tot_len);
-    es->p = NULL;
     pbuf_free(p);
-    ret_err = ERR_OK;
-  }
-  else
-  {
-    /* unknown es->state, trash data  */
-    tcp_recved(tpcb, p->tot_len);
-    es->p = NULL;
-    pbuf_free(p);
-    ret_err = ERR_OK;
-  }
-  return ret_err;
+    return ERR_OK;
 }
 
-/**
-  * @brief  This function implements the tcp_err callback function (called
-  *         when a fatal tcp_connection error occurs.
-  * @param  arg: pointer on argument parameter
-  * @param  err: not used
-  * @retval None
-  */
+/* tcp_err callback */
 static void tcp_server_error(void *arg, err_t err)
 {
-  struct tcp_server_struct *es;
-
-  LWIP_UNUSED_ARG(err);
-
-  es = (struct tcp_server_struct *)arg;
-  if (es != NULL)
-  {
-    /*  free es structure */
-    mem_free(es);
-  }
+    LWIP_UNUSED_ARG(err);
+    struct tcp_server_struct *es = (struct tcp_server_struct*)arg;
+    if (es) mem_free(es);
 }
 
-/**
-  * @brief  This function implements the tcp_poll LwIP callback function
-  * @param  arg: pointer on argument passed to callback
-  * @param  tpcb: pointer on the tcp_pcb for the current tcp connection
-  * @retval err_t: error code
-  */
+/* tcp_poll callback */
 static err_t tcp_server_poll(void *arg, struct tcp_pcb *tpcb)
 {
-  err_t ret_err;
-  struct tcp_server_struct *es;
+    struct tcp_server_struct *es = (struct tcp_server_struct*)arg;
+    if (!es) {
+        tcp_abort(tpcb);
+        return ERR_ABRT;
+    }
 
-  es = (struct tcp_server_struct *)arg;
-  if (es != NULL)
-  {
-    if (es->p != NULL)
-    {
-      tcp_sent(tpcb, tcp_server_sent);
-      /* there is a remaining pbuf (chain) , try to send data */
-      tcp_server_send(tpcb, es);
-    }
-    else
-    {
-      /* no remaining pbuf (chain)  */
-      if(es->state == ES_CLOSING)
-      {
-        /*  close tcp connection */
-        tcp_server_connection_close(tpcb, es);
-      }
-    }
-    ret_err = ERR_OK;
-  }
-  else
-  {
-    /* nothing to be done */
-    tcp_abort(tpcb);
-    ret_err = ERR_ABRT;
-  }
-  return ret_err;
+    if (es->p) tcp_server_send(tpcb, es);
+    else if(es->state == ES_CLOSING) tcp_server_connection_close(tpcb, es);
+
+    return ERR_OK;
 }
 
-/**
-  * @brief  This function implements the tcp_sent LwIP callback (called when ACK
-  *         is received from remote host for sent data)
-  * @param  None
-  * @retval None
-  */
+/* tcp_sent callback */
 static err_t tcp_server_sent(void *arg, struct tcp_pcb *tpcb, u16_t len)
 {
-  struct tcp_server_struct *es;
+    struct tcp_server_struct *es = (struct tcp_server_struct*)arg;
+    LWIP_UNUSED_ARG(len);
 
-  LWIP_UNUSED_ARG(len);
+    es->retries = 0;
+    if(es->p) tcp_server_send(tpcb, es);
+    else if(es->state == ES_CLOSING) tcp_server_connection_close(tpcb, es);
 
-  es = (struct tcp_server_struct *)arg;
-  es->retries = 0;
-
-  if(es->p != NULL)
-  {
-    /* still got pbufs to send */
-    tcp_sent(tpcb, tcp_server_sent);
-    tcp_server_send(tpcb, es);
-  }
-  else
-  {
-    /* if no more data to send and client closed connection*/
-    if(es->state == ES_CLOSING)
-      tcp_server_connection_close(tpcb, es);
-  }
-  return ERR_OK;
+    return ERR_OK;
 }
 
-
-/**
-  * @brief  This function is used to send data for tcp connection
-  * @param  tpcb: pointer on the tcp_pcb connection
-  * @param  es: pointer on _state structure
-  * @retval None
-  */
+/* Send data on TCP */
 static void tcp_server_send(struct tcp_pcb *tpcb, struct tcp_server_struct *es)
 {
-  struct pbuf *ptr;
-  err_t wr_err = ERR_OK;
+    struct pbuf *ptr;
+    err_t wr_err = ERR_OK;
 
-  while ((wr_err == ERR_OK) &&
-         (es->p != NULL) &&
-         (es->p->len <= tcp_sndbuf(tpcb)))
-  {
-
-    /* get pointer on pbuf from es structure */
-    ptr = es->p;
-
-    /* enqueue data for transmission */
-    wr_err = tcp_write(tpcb, ptr->payload, ptr->len, 1);
-
-    if (wr_err == ERR_OK)
-    {
-      u16_t plen;
-      u8_t freed;
-
-      plen = ptr->len;
-
-      /* continue with next pbuf in chain (if any) */
-      es->p = ptr->next;
-
-      if(es->p != NULL)
-      {
-        /* increment reference count for es->p */
-        pbuf_ref(es->p);
-      }
-
-     /* chop first pbuf from chain */
-      do
-      {
-        /* try hard to free pbuf */
-        freed = pbuf_free(ptr);
-      }
-      while(freed == 0);
-     /* we can read more data now */
-     tcp_recved(tpcb, plen);
-   }
-   else if(wr_err == ERR_MEM)
-   {
-      /* we are low on memory, try later / harder, defer to poll */
-     es->p = ptr;
-   }
-   else
-   {
-     /* other problem ?? */
-   }
-  }
+    while((wr_err == ERR_OK) && es->p && (es->p->len <= tcp_sndbuf(tpcb))) {
+        ptr = es->p;
+        wr_err = tcp_write(tpcb, ptr->payload, ptr->len, TCP_WRITE_FLAG_COPY);
+        if(wr_err == ERR_OK) {
+            u16_t plen = ptr->len;
+            es->p = ptr->next;
+            if(es->p) pbuf_ref(es->p);
+            pbuf_free(ptr);
+            tcp_recved(tpcb, plen);
+        } else if(wr_err == ERR_MEM) {
+            es->p = ptr;
+        }
+    }
 }
 
-/**
-  * @brief  This functions closes the tcp connection
-  * @param  tcp_pcb: pointer on the tcp connection
-  * @param  es: pointer on _state structure
-  * @retval None
-  */
+/* Close TCP connection */
 static void tcp_server_connection_close(struct tcp_pcb *tpcb, struct tcp_server_struct *es)
 {
+    tcp_arg(tpcb, NULL);
+    tcp_sent(tpcb, NULL);
+    tcp_recv(tpcb, NULL);
+    tcp_err(tpcb, NULL);
+    tcp_poll(tpcb, NULL, 0);
 
-  /* remove all callbacks */
-  tcp_arg(tpcb, NULL);
-  tcp_sent(tpcb, NULL);
-  tcp_recv(tpcb, NULL);
-  tcp_err(tpcb, NULL);
-  tcp_poll(tpcb, NULL, 0);
+    if(es) mem_free(es);
+    if(tcp_client_pcb == tpcb) tcp_client_pcb = NULL;
 
-  /* delete es structure */
-  if (es != NULL)
-  {
-    mem_free(es);
-  }
-
-  /* close tcp connection */
-  tcp_close(tpcb);
+    tcp_close(tpcb);
 }
 
-/* Handle the incoming TCP Data */
-
-static void tcp_server_handle (struct tcp_pcb *tpcb, struct tcp_server_struct *es)
+/* Handle received TCP data */
+static void tcp_server_handle(struct tcp_pcb *tpcb, struct tcp_server_struct *es)
 {
-	struct tcp_server_struct *esTx;
-
-	/* get the Remote IP */
-	ip4_addr_t inIP = tpcb->remote_ip;
-	uint16_t inPort = tpcb->remote_port;
-
-	/* Extract the IP */
-	char *remIP = ipaddr_ntoa(&inIP);
-	esTx = (struct tcp_server_struct *)mem_malloc(sizeof(struct tcp_server_struct));
-	esTx->state = es->state;
-	esTx->pcb = es->pcb;
-	esTx->p = es->p;
-
-	char buf[100];
-	memset (buf, '\0', 100);
-
-	strncpy(buf, (char *)es->p->payload, es->p->tot_len);
-	strcat (buf, "+ Hello from TCP SERVER\n");
-
-
-	esTx->p->payload = (void *)buf;
-	esTx->p->tot_len = (es->p->tot_len - es->p->len) + strlen (buf);
-	esTx->p->len = strlen (buf);
-
-	tcp_server_send(tpcb, esTx);
-
-	pbuf_free(es->p);
+    if(es->p) {
+        handle_tcp_received(tpcb, (uint8_t*)es->p->payload, es->p->tot_len);
+        pbuf_free(es->p);
+        es->p = NULL;
+    }
 
 }
