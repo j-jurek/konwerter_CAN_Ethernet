@@ -4,6 +4,7 @@
 #include "stm32f4xx_hal.h"
 #include "lwip/tcp.h"
 #include <stdint.h>
+#include "stats.h"
 
 #define CAN_QUEUE_SIZE 32
 

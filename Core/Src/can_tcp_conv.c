@@ -38,6 +38,7 @@ void CAN1_RX0_IRQ_SaveToQueue(void) {
 
         queue_push(&queue_can_rx, &f);
         can_frame_pending = 1;
+        can_rx_cnt++;
     }
 }
 
@@ -61,7 +62,9 @@ void handle_tcp_received(struct tcp_pcb *tpcb, const uint8_t *buf, uint16_t len)
 
         p   += (6 + f.dlc);
         len -= (6 + f.dlc);
+        tcp_rx_cnt++;
     }
+
 }
 
 void send_can_from_queue(void) {
@@ -78,6 +81,7 @@ void send_can_from_queue(void) {
         h.StdId = f.ide ? 0 : f.id;
 
         HAL_CAN_AddTxMessage(&hcan1, &h, f.data, &mailbox);
+        can_tx_cnt++;
     }
 }
 
@@ -104,6 +108,7 @@ void send_can_over_tcp(void) {
 
         tcp_write(active_tcp_pcb, buf, 6 + f.dlc, TCP_WRITE_FLAG_COPY);
         tcp_output(active_tcp_pcb);
+        tcp_tx_cnt++;
     }
 
     can_frame_pending = 0;
