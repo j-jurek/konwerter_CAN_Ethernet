@@ -24,6 +24,7 @@
 /* USER CODE BEGIN Includes */
 #include "lwip/apps/httpd.h"
 #include "tcpServer.h"
+#include "tcpClient.h"
 #include <can_tcp_conv.h>
 /* USER CODE END Includes */
 
@@ -73,6 +74,8 @@ uint8_t TxData[8];
 uint8_t RxData[8];
 
 uint8_t count = 0;
+
+char tcp_client =0;
 
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
@@ -133,8 +136,16 @@ int main(void)
   MX_USB_OTG_FS_HCD_Init();
   /* USER CODE BEGIN 2 */
   httpd_init();
-  tcp_server_init();
   CAN_filter_config();
+
+  //USTAWIENIE TRYBU PRACY
+  tcp_client = 1;
+  if(tcp_client){
+	  tcp_client_init();
+  }else{
+	  tcp_server_init();
+  }
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -144,6 +155,9 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	  	  if(tcp_client){
+	  		tcp_client_loop();
+	  	  }
 	      MX_LWIP_Process();       // TCP stack
 	      send_can_from_queue();   // TCP->CAN
 	      send_can_over_tcp(); // CAN->TCP
